@@ -1,3 +1,4 @@
+from cmath import log
 import struct
 from collections import namedtuple
 
@@ -30,7 +31,7 @@ def read_xm_header(fh):
     # Signature
 
     id_text = fh.read(17)
-    module_name = fh.read(20).decode("ascii")
+    module_name = fh.read(20).decode("ascii").strip()
     magic = fh.read(1)
     tracker_name = fh.read(20).decode("ascii")
     version = struct.unpack("bb", fh.read(2))
@@ -78,23 +79,81 @@ XMPattern = namedtuple(
         "packing_type",
         "n_rows",
         "packed_size",
-        "packed_data",
+        "pattern_data",
     ],
 )
 
 
-def read_xm_pattern(fh):
+XMChannel = namedtuple(
+    "XMChannel", ["note", "instrument", "volume", "effect_type", "effect_param"]
+)
+
+
+def read_xm_pattern(fh, n_channels):
 
     # Pattern
 
     pattern_size = struct.unpack("<I", fh.read(4))[0]
-    packing_type = fh.read(1)
+    packing_type = struct.unpack("B", fh.read(1))[0]
+    assert packing_type == 0, "Packing type always 0"
     n_rows = struct.unpack("H", fh.read(2))[0]
     packed_size = struct.unpack("H", fh.read(2))[0]
-    packed_data = fh.read(packed_size)  # TODO unpack patterns
+    packed_data = struct.unpack("B" * packed_size, fh.read(packed_size))
+
+    pattern_data = []
+    while True:
+        line = []
+
+        for _ in range(n_channels):
+            if len(packed_data) == 0:
+                break
+
+            note, instrument, volume, effect_type, effect_param = [0, 0, 0, 0, 0]
+
+            next_byte = packed_data[0]
+            packed_data = packed_data[1:]
+
+            is_packed = bool(next_byte & 0b10000000)
+            next_note = bool(next_byte & 0b00000001)
+            next_inst = bool(next_byte & 0b00000010)
+            next_volu = bool(next_byte & 0b00000100)
+            next_fxty = bool(next_byte & 0b00001000)
+            next_fxpa = bool(next_byte & 0b00010000)
+
+            if is_packed:
+                if next_note:
+                    next_byte = packed_data[0]
+                    packed_data = packed_data[1:]
+                    note = next_byte
+                if next_inst:
+                    next_byte = packed_data[0]
+                    packed_data = packed_data[1:]
+                    instrument = next_byte
+                if next_volu:
+                    next_byte = packed_data[0]
+                    packed_data = packed_data[1:]
+                    volume = next_byte
+                if next_fxty:
+                    next_byte = packed_data[0]
+                    packed_data = packed_data[1:]
+                    effect_type = next_byte
+                if next_fxpa:
+                    next_byte = packed_data[0]
+                    packed_data = packed_data[1:]
+                    effect_param = next_byte
+            else:
+                [note, instrument, volume, effect_type, effect_param] = packed_data[:5]
+                packed_data = packed_data[5:]
+
+            line.append(XMChannel(note, instrument, volume, effect_type, effect_param))
+
+        if line:
+            pattern_data.append(line)
+        else:
+            break
 
     return XMPattern(
-        pattern_size, packing_type, n_rows, packed_size, lambda: packed_data
+        pattern_size, packing_type, n_rows, packed_size, lambda: pattern_data
     )
 
 
@@ -252,13 +311,19 @@ def read_xm_sample(fh, sample_header_size):
 
     fh.read(1)  # reserved
 
-    sample_name = fh.read(22).decode("ascii")
+    sample_name = fh.read(22).decode("ascii").strip()
 
     # 16 bit sample data
     if type >> 2 == 4:
-        sample_data = struct.unpack("h" * (sample_size // 2), fh.read(sample_size))
+        de_sample_data = struct.unpack("h" * (sample_size // 2), fh.read(sample_size))
     else:
-        sample_data = struct.unpack("b" * sample_size, fh.read(sample_size))
+        de_sample_data = struct.unpack("b" * sample_size, fh.read(sample_size))
+
+    # Delta decode
+    sample_data = [de_sample_data[0]]
+    if len(de_sample_data) > 1:
+        for point in de_sample_data[1:]:
+            sample_data.append(point + sample_data[-1])
 
     fh.seek(fh_sample_start + sample_size + sample_header_size)
 
@@ -281,7 +346,8 @@ class XMFile:
         self.__fh = open(filename, "rb")
         self.header = read_xm_header(self.__fh)
         self.patterns = [
-            read_xm_pattern(self.__fh) for _ in range(self.header.n_patterns)
+            read_xm_pattern(self.__fh, self.header.n_channels)
+            for _ in range(self.header.n_patterns)
         ]
         self.instruments = [
             read_xm_instrument(self.__fh) for _ in range(self.header.n_instruments)
@@ -289,19 +355,3 @@ class XMFile:
 
     def __del__(self):
         self.__fh.close()
-
-
-if __name__ == "__main__":
-    xm_file = XMFile("example.xm")
-
-    info = f"""
-Module name: {xm_file.header.module_name}
-Length: {xm_file.header.song_length}
-Channels: {xm_file.header.n_channels}
-Patterns: {xm_file.header.n_channels}
-Instruments: {xm_file.header.n_instruments}
-BPM: {xm_file.header.bpm}
-Tempo: {xm_file.header.tempo}
-    """
-
-    print(info)
