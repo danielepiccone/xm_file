@@ -8,6 +8,10 @@ setup(
     author="Daniele Piccone",
     author_email="mild.taste@gmail.com",
     description="XM (Fasttracker II) module file reader",
+    long_description=open("README.md").read(),
+    long_description_content_type='text/markdown',
     packages=find_packages(),
     install_requires=[],
 )
+
+

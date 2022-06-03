@@ -2,7 +2,7 @@ from cmath import log
 import struct
 from collections import namedtuple
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 XMHeader = namedtuple(
     "XMHeader",
